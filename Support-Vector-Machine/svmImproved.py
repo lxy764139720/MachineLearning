@@ -2,11 +2,11 @@ import numpy as np
 
 
 class OptStruct:
-    def __init__(self, X, Y, C, tolerance):
+    def __init__(self, X, Y, C, epsilon):
         self.X = X
         self.Y = Y
         self.C = C
-        self.tolerance = tolerance
+        self.epsilon = epsilon
         self.m = np.shape(X)[0]
         self.alpha = np.zeros((self.m, 1))
         self.b = 0
@@ -60,15 +60,21 @@ def updateEk(opt, k):
     opt.ECache[k] = [1, Ek]
 
 
-def innerL(i, opt):
+def smo(i, opt):
     """
     内层循环，给定要优化的alpha[i]，找到最优的alpha[j]，并对这一对(i,j)进行优化
     :return: 1：i,j被更新，0：i,j未被更新
     """
     Ei = calcEk(opt, i)
-    if ((opt.Y[i] * Ei < -opt.tolerance) and (opt.alpha[i] < opt.C)) or (
-            (opt.Y[i] * Ei > opt.tolerance) and (opt.alpha[i] > 0)):
+    # 第一个alpha变量的选择：选择不满足KKT条件的样本点(X[i],Y[i])和alpha[i]，满足以下任意一条即满足KKT条件
+    # alpha[i]==0 且 Y[i]*g(xi)>=1（即Y[i]*Ei>=0.0）
+    # 0<alpha[i]<C 且 Y[i]*g(xi)==1（即Y[i]*Ei==0.0）
+    # alpha[i]==C 且 Y[i]*g(xi)<=1（即Y[i]*Ei<=0.0）
+    if ((np.abs(opt.Y[i] * Ei) > opt.epsilon) and (0 < opt.alpha[i] < opt.C)) or \
+            ((opt.Y[i] * Ei < opt.epsilon) and (opt.alpha[i] == 0)) or \
+            ((opt.Y[i] * Ei > opt.epsilon) and (opt.alpha[i] == opt.C)):
 
+        # 第二个alpha变量的选择：使alpha[j]的变化最大
         j, Ej = selectJ(i, opt, Ei)
         alphaIold = opt.alpha[i].copy()
         alphaJold = opt.alpha[j].copy()
@@ -85,6 +91,7 @@ def innerL(i, opt):
             return 0
 
         # 更新alpha_j
+        # eta=K11+K22-2K12
         eta = opt.X[i, :] * opt.X[i, :].T + opt.X[j, :] * opt.X[j, :]. \
             T - 2.0 * opt.X[i, :] * opt.X[j, :].T
         if eta <= 0:
@@ -118,7 +125,7 @@ def innerL(i, opt):
         return 0
 
 
-def smoP(X, Y, C, tolerance, maxIter, kTup=('lin', 0)):
+def svm(X, Y, C, tolerance, maxIter, kTup=('lin', 0)):
     opt = OptStruct(np.array(X), np.array(Y).T, C, tolerance)
     iteration = 0
     entireSet = True  # 冷热数据分离，热数据：0<alpha<C，冷数据：alpha<=0 | alpha>=C
@@ -129,14 +136,14 @@ def smoP(X, Y, C, tolerance, maxIter, kTup=('lin', 0)):
         # 遍历全部数据集，对每个alpha进行优化
         if entireSet:
             for i in range(opt.m):
-                alphaPairsChanged += innerL(i, opt)
+                alphaPairsChanged += smo(i, opt)
                 print("全部遍历, iter:%d i:%d, pairs changed %d".format(iteration, i, alphaPairsChanged))
                 iteration += 1
         # 遍历热数据
         else:
             nonBoundIs = np.nonzero((opt.alpha > 0) * (opt.alpha < C))[0]  # 非边界值：0<alpha<C
             for i in nonBoundIs:
-                alphaPairsChanged += innerL(i, opt)
+                alphaPairsChanged += smo(i, opt)
                 print("非边界值遍历, iter: %d i:%d, pairs changed %d".format(iteration, i, alphaPairsChanged))
                 iteration += 1
         # 如果该次遍历了全部的alpha，则下次遍历热数据中的alpha
