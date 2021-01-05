@@ -4,11 +4,11 @@ from numpy import mat
 
 
 def smoSimple(dataMatIn, classLabels, C, toler, maxIter):
-    dataMatrix = mat(dataMatIn)
+    dataMat = mat(dataMatIn)
     labelMat = mat(classLabels).transpose()
 
     b = 0
-    m, n = np.shape(dataMatrix)
+    m, n = np.shape(dataMat)
     alphas = mat(np.zeros((m, 1)))
 
     iter = 0
@@ -16,13 +16,13 @@ def smoSimple(dataMatIn, classLabels, C, toler, maxIter):
         alphaPairsChanged = 0
         for i in range(m):
             # g(xi)=sum(alpha_i*yi*K(xi,x))+b
-            g_xi = float(np.multiply(alphas, labelMat).T * (dataMatrix * dataMatrix[i, :].T)) + b
+            g_xi = float(np.multiply(alphas, labelMat).T * (dataMat * dataMat[i, :].T)) + b
             # Ei=g(xi)-yi
             Ei = g_xi - float(labelMat[i])
 
             if ((labelMat[i] * Ei < -toler) and (alphas[i] < C)) or ((labelMat[i] * Ei > toler) and (alphas[i] > 0)):
                 j = selectJrand(i, m)
-                g_xj = float(np.multiply(alphas, labelMat).T * (dataMatrix * dataMatrix[j, :].T)) + b
+                g_xj = float(np.multiply(alphas, labelMat).T * (dataMat * dataMat[j, :].T)) + b
                 Ej = g_xj - float(labelMat[j])
 
                 alphaIold = alphas[i].copy()
@@ -40,8 +40,8 @@ def smoSimple(dataMatIn, classLabels, C, toler, maxIter):
                     continue
 
                 # 更新alpha_j
-                eta = dataMatrix[i, :] * dataMatrix[i, :].T + dataMatrix[j, :] * dataMatrix[j, :]. \
-                    T - 2.0 * dataMatrix[i, :] * dataMatrix[j, :].T
+                eta = dataMat[i, :] * dataMat[i, :].T + dataMat[j, :] * dataMat[j, :]. \
+                    T - 2.0 * dataMat[i, :] * dataMat[j, :].T
                 if eta <= 0:
                     print("eta<=0")
                     continue
@@ -54,10 +54,10 @@ def smoSimple(dataMatIn, classLabels, C, toler, maxIter):
                 # 更新alpha_i
                 alphas[i] += labelMat[j] * labelMat[i] * (alphaJold - alphas[j])
 
-                b1 = b - Ei - labelMat[i] * (alphas[i] - alphaIold) * dataMatrix[i, :] * dataMatrix[i, :]. \
-                    T - labelMat[j] * (alphas[j] - alphaJold) * dataMatrix[i, :] * dataMatrix[j, :].T
-                b2 = b - Ej - labelMat[i] * (alphas[i] - alphaIold) * dataMatrix[i, :] * dataMatrix[j, :]. \
-                    T - labelMat[j] * (alphas[j] - alphaJold) * dataMatrix[j, :] * dataMatrix[j, :].T
+                b1 = b - Ei - labelMat[i] * (alphas[i] - alphaIold) * dataMat[i, :] * dataMat[i, :]. \
+                    T - labelMat[j] * (alphas[j] - alphaJold) * dataMat[i, :] * dataMat[j, :].T
+                b2 = b - Ej - labelMat[i] * (alphas[i] - alphaIold) * dataMat[i, :] * dataMat[j, :]. \
+                    T - labelMat[j] * (alphas[j] - alphaJold) * dataMat[j, :] * dataMat[j, :].T
                 if 0 < alphas[i] < C:
                     b = b1
                 elif 0 < alphas[j] < C:
