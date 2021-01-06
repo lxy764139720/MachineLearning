@@ -3,8 +3,8 @@ from sklearn.metrics import accuracy_score
 
 
 class SVC:
-    def __init__(self, C=1e9, kernel='rbf', gamma='scale', coef0=0, degree=3, epsilon=1e-6, max_steps=1000,
-                 verbose=True):
+    def __init__(self, C=1e9, kernel='rbf', gamma='scale', coef0=0, degree=3, epsilon=1e-3, max_steps=np.inf,
+                 verbose=False):
         assert C > 0, "C must be greater than 0"
         assert epsilon > 0, "epsilon must be greater than 0"
         self.C = C
