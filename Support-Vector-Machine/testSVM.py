@@ -18,7 +18,7 @@ def loadDataSet(fileName):
 
 data, label = loadDataSet('./testSet.txt')
 
-b, alpha = svmImproved.svm(data, label.reshape((-1, 1)), 1e9, 1e-6, 100)
+b, alpha = svmImproved.svm(data, label.reshape((-1, 1)), 1e9, 1e-6, 100, ('rbf', 10))
 print("alpha:")
 print(alpha)
 w = svmImproved.weight(data, label.reshape((-1, 1)), alpha.reshape((-1, 1)))

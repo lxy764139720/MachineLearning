@@ -2,7 +2,7 @@ import numpy as np
 
 
 class OptStruct:
-    def __init__(self, X, Y, C, epsilon):
+    def __init__(self, X, Y, C, epsilon, kernel):
         assert X.shape[0] == Y.shape[0], "the size of X must be equal to the size of y"
         assert C > 0, "C must be greater than 0"
         assert epsilon > 0, "epsilon must be greater than 0"
@@ -15,6 +15,24 @@ class OptStruct:
         self.b = 0
         # ECache[0]:eCache是否有效（已计算好），ECache[1]:实际的E值
         self.ECache = np.zeros((self.m, 2))
+        self.K = np.zeros((self.m, self.m))
+        for i in range(self.m):
+            self.K[:, i] = kernelTrans(self.X, self.X[i, :], kernel)
+
+
+def kernelTrans(X, A, kernel):
+    m, n = np.shape(X)
+    K = np.zeros((m, 1))
+    if kernel[0] == 'linear':
+        K = X.dot(A.T)
+    elif kernel[0] == 'rbf':
+        for j in range(m):
+            deltaRow = X[j, :] - A
+            K[j] = deltaRow.dot(deltaRow.T)
+        K = np.exp(K / (-1 * kernel[1] ** 2))
+    else:
+        raise NameError('The kernel name is not recognized')
+    return K.flatten()
 
 
 def calcEk(opt, k):
@@ -23,7 +41,7 @@ def calcEk(opt, k):
     g(xi)=sum(alpha_i*yi*K(xi,x))+b
     Ei=g(xi)-yi
     """
-    g_xk = (np.multiply(opt.alpha, opt.Y).T.dot(opt.X.dot(opt.X[k, :].T)) + opt.b).astype(np.float)
+    g_xk = (np.multiply(opt.alpha, opt.Y).T.dot(opt.K[:, k]) + opt.b).astype(np.float)
     Ek = g_xk - float(opt.Y[k])
     return Ek
 
@@ -95,7 +113,7 @@ def smo(i, opt):
 
         # 更新alpha_j
         # eta=K11+K22-2K12
-        eta = opt.X[i, :].dot(opt.X[i, :].T) + opt.X[j, :].dot(opt.X[j, :].T) - 2.0 * opt.X[i, :].dot(opt.X[j, :].T)
+        eta = opt.K[i, i] + opt.K[j, j] - 2.0 * opt.K[i, j]
         if eta <= 0:
             print("eta<=0")
             return 0
@@ -112,10 +130,10 @@ def smo(i, opt):
         updateEk(opt, i)
 
         # 更新b
-        b1 = opt.b - Ei - opt.Y[i] * (opt.alpha[i] - alphaIold) * opt.X[i, :].dot(opt.X[i, :].T) - opt.Y[j] * (
-                opt.alpha[j] - alphaJold) * opt.X[i, :].dot(opt.X[j, :].T)
-        b2 = opt.b - Ej - opt.Y[i] * (opt.alpha[i] - alphaIold) * opt.X[i, :].dot(opt.X[j, :].T) - opt.Y[j] * (
-                opt.alpha[j] - alphaJold) * opt.X[j, :].dot(opt.X[j, :].T)
+        b1 = opt.b - Ei - opt.Y[i] * (opt.alpha[i] - alphaIold) * opt.K[i, i] - opt.Y[j] * (
+                opt.alpha[j] - alphaJold) * opt.K[i, j]
+        b2 = opt.b - Ej - opt.Y[i] * (opt.alpha[i] - alphaIold) * opt.K[i, j] - opt.Y[j] * (
+                opt.alpha[j] - alphaJold) * opt.K[j, j]
         if 0 < opt.alpha[i] < opt.C:
             opt.b = b1
         elif 0 < opt.alpha[j] < opt.C:
@@ -127,8 +145,8 @@ def smo(i, opt):
         return 0
 
 
-def svm(X, Y, C, tolerance, maxIter, kTup=('lin', 0)):
-    opt = OptStruct(np.array(X), np.array(Y), C, tolerance)
+def svm(X, Y, C, tolerance, maxIter, kernel=('linear', 0)):
+    opt = OptStruct(np.array(X), np.array(Y), C, tolerance, kernel)
     iteration = 0
     entireSet = True  # 冷热数据分离，热数据：0<alpha<C，冷数据：alpha<=0 | alpha>=C
     alphaPairsChanged = 0
