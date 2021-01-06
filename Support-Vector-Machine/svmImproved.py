@@ -145,8 +145,8 @@ def smo(i, opt):
         return 0
 
 
-def svm(X, Y, C, tolerance, maxIter, kernel=('linear', 0)):
-    opt = OptStruct(np.array(X), np.array(Y), C, tolerance, kernel)
+def svm(X, Y, C, epsilon, maxIter, kernel=('linear', 0)):
+    opt = OptStruct(np.array(X), np.array(Y), C, epsilon, kernel)
     iteration = 0
     entireSet = True  # 冷热数据分离，热数据：0<alpha<C，冷数据：alpha<=0 | alpha>=C
     alphaPairsChanged = 0
