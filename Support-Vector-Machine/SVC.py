@@ -4,7 +4,7 @@ from sklearn.metrics import accuracy_score
 
 class SVC:
     def __init__(self, C=1e9, kernel='rbf', gamma='scale', coef0=0, degree=3, epsilon=1e-3, max_steps=np.inf,
-                 verbose=False):
+                 probability=False, verbose=False):
         assert C > 0, "C must be greater than 0"
         assert epsilon > 0, "epsilon must be greater than 0"
         self.C = C
@@ -14,21 +14,28 @@ class SVC:
         self.degree = degree
         self.epsilon = epsilon
         self.max_steps = max_steps
+        self.probability = probability
         self.verbose = verbose
         # 私有变量
         self._X = None
-        self._Y = None
+        self._Y = None  # 规定二分类正例为1，负例为-1
         # 计算值
         self.alpha_ = None
         self.b_ = None
         self.w_ = None
+        self.K_ = None
+        self.score_ = None
+        self.prob_A_ = None
+        self.prob_B_ = None
+        self.predict_prob_ = None  # 预测输出的概率
 
     class OptStruct:
         def __init__(self, X, Y, C, epsilon, kernel, gamma, coef0, degree):
             assert X.shape[0] == Y.shape[0], "the size of X must be equal to the size of y"
             assert C > 0, "C must be greater than 0"
             assert epsilon > 0, "epsilon must be greater than 0"
-            assert kernel == 'rbf' and gamma > 0, "gamma of rbf kernel must be greater than 0"
+            if kernel == 'rbf' and gamma > 0:
+                raise ValueError("gamma of rbf kernel must be greater than 0")
             self.X = X
             self.Y = Y
             self.C = C
@@ -53,6 +60,9 @@ class SVC:
                 self.gamma = 1 / X.shape[1]
         opt = self.OptStruct(np.array(X), np.array(Y), self.C, self.epsilon, self.kernel, self.gamma, self.coef0,
                              self.degree)
+        self._X = X
+        self._Y = Y
+
         iteration = 0
         entireSet = True  # 冷热数据分离，热数据：0<alpha<C，冷数据：alpha<=0 | alpha>=C
         alphaPairsChanged = 0
@@ -86,6 +96,10 @@ class SVC:
         self.alpha_ = opt.alpha
         self.b_ = opt.b
         self.w_ = self._weight(X, Y, self.alpha_)
+        # 计算svm sigmoid概率函数的系数
+        if self.probability:
+            self.K_ = opt.K
+            self.prob_A_, self.prob_B_ = self._calc_prob((self.alpha_ * Y * self.K_).sum(axis=0), self._Y)
         return self
 
     @classmethod
@@ -217,18 +231,112 @@ class SVC:
             return 0
 
     def _weight(self, X, Y, alpha):
+        # w = sum(alpha_i*yi*Xi)
         w = (Y * alpha * X).sum(axis=0)
         return w
+
+    def _calc_prob(self, score, Y):
+        """
+        :param score:决策函数输出 sum(alpha*Y*K(X,X))+b
+        :param Y:样本标签 {1, -1}
+        :return A, B:sigmoid函数的参数 A, B
+        """
+        t = np.zeros(Y.shape)
+
+        maxIter = 100
+        minStep = 1e-10
+        sigma = 1e-12
+
+        numPositive = np.count_nonzero(Y == 1)
+        numNegative = np.count_nonzero(Y == -1)
+        length = numPositive + numNegative
+
+        highTarget = (numPositive + 1.0) / (numPositive + 2.0)
+        lowTarget = 1 / numNegative + 2.0
+        for i in range(length):
+            if Y[i] > 0:
+                t[i] = highTarget
+            else:
+                t[i] = lowTarget
+
+        A = 0.0
+        B = np.log((numNegative + 1.0) / (numPositive + 1.0))
+        f_val = 0.0
+        for i in range(length):
+            fApB = A * score[i] + B
+            if fApB >= 0:
+                f_val += t[i] * fApB + np.log(1 + np.exp(-fApB))
+            else:
+                f_val += (t[i] - 1) * fApB + np.log(1 + np.exp(fApB))
+
+        it = 0
+        while it < maxIter:
+            if self.verbose:
+                print("Probability: iter:{}".format(it))
+            h11 = sigma
+            h22 = sigma
+            h21 = 0.0
+            g1 = 0.0
+            g2 = 0.0
+            for i in range(length):
+                fApB = A * score[i] + B
+                if fApB >= 0:
+                    p = np.exp(-fApB) / (1.0 + np.exp(-fApB))
+                    q = 1.0 / (1.0 + np.exp(-fApB))
+                else:
+                    p = 1.0 / (1.0 + np.exp(fApB))
+                    q = np.exp(fApB) / (1.0 + np.exp(fApB))
+                d2 = p * q
+                h11 += score[i] * score[i] * d2
+                h22 += d2
+                h21 += score[i] * d2
+                d1 = t[i] - p
+                g1 += score[i] * d1
+                g2 += d1
+            if np.abs(g1) < 1e-5 and np.abs(g2):
+                break
+            det = h11 * h22 - h21 * h21
+            dA = -(h22 * g1 - h21 * g2) / det
+            dB = -(h21 * g1 + h11 * g2) / det
+            gd = g1 * dA + g2 * dB
+            stepSize = 1
+            while stepSize >= minStep:
+                newA = A + stepSize * dA
+                newB = B + stepSize * dB
+                new_f = 0.0
+                for i in range(length):
+                    fApB = score[i] * newA + newB
+                    if fApB >= 0:
+                        new_f += t[i] * fApB + np.log(1 + np.exp(-fApB))
+                    else:
+                        new_f = (t[i] - 1) * fApB + np.log(1 + np.exp(fApB))
+                if new_f < f_val + 0.0001 * stepSize * gd:
+                    A = newA
+                    B = newB
+                    f_val = new_f
+                    break
+                else:
+                    stepSize /= 2.0
+            if stepSize < minStep:
+                print("Probability: Line search fails")
+                break
+            it += 1
+        if it >= maxIter:
+            print("Probability: Reaching maximum iterations")
+        return A, B
 
     def predict(self, X_test):
         assert self.w_ is not None, "must fit before predict"
         assert X_test.shape[1] == len(self.w_), "the feature number of X_predict must be equal to X_train"
         # Y_predict = sign(sum(alpha*Y*K(X,X_test))+b)
         K = np.zeros((self._X.shape[0], X_test.shape[0]))
-        for i in range(X_test):
+        for i in range(X_test.shape[0]):
             K[:, i] = self.kernelTrans(self._X, X_test[i, :], self.kernel, self.gamma, self.coef0, self.degree)
         score = (self.alpha_ * self._Y * K).sum(axis=0) + self.b_
         Y_predict = (score >= 0).astype(int) * 2 - 1
+        # 计算输出为正例1的概率
+        if self.probability:
+            self.predict_prob_ = 1 / (1 + np.exp(self.prob_A_ * score + self.prob_B_))
         return Y_predict
 
     def score(self, X_test, Y_test):

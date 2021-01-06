@@ -1,23 +1,24 @@
 import numpy as np
 
 
-def function(score, Y, numPositive, numNegative):
+def probability(score, Y):
     """
     :param score:决策函数输出 sum(alpha*Y*K(X,X_test))+b
-    :param Y:样本标签
-    :param numPositive:正例样本个数
-    :param numNegative:负例样本个数
+    :param Y:样本标签{1, -1}
     :return A, B:sigmoid函数的参数A, B
     """
-    t = np.array(Y.shape)
+    t = np.zeros(Y.shape)
 
     maxIter = 100
     minStep = 1e-10
     sigma = 1e-12
 
+    numPositive = np.count_nonzero(Y == 1)
+    numNegative = np.count_nonzero(Y != 1)
+    length = numPositive + numNegative
+
     highTarget = (numPositive + 1.0) / (numPositive + 2.0)
     lowTarget = 1 / numNegative + 2.0
-    length = numPositive + numNegative
     for i in range(length):
         if Y[i] > 0:
             t[i] = highTarget
@@ -83,6 +84,7 @@ def function(score, Y, numPositive, numNegative):
         if stepSize < minStep:
             print("Line search fails")
             break
+        it += 1
     if it >= maxIter:
         print("Reaching maximum iterations")
     return A, B
