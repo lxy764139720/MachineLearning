@@ -3,6 +3,9 @@ import numpy as np
 
 class OptStruct:
     def __init__(self, X, Y, C, epsilon):
+        assert X.shape[0] == Y.shape[0], "the size of X must be equal to the size of y"
+        assert C > 0, "C must be greater than 0"
+        assert epsilon > 0, "epsilon must be greater than 0"
         self.X = X
         self.Y = Y
         self.C = C
@@ -20,7 +23,7 @@ def calcEk(opt, k):
     g(xi)=sum(alpha_i*yi*K(xi,x))+b
     Ei=g(xi)-yi
     """
-    g_xk = float(np.multiply(opt.alpha, opt.Y).T * (opt.X * opt.Y[k, :].T)) + opt.b
+    g_xk = (np.multiply(opt.alpha, opt.Y).T.dot(opt.X.dot(opt.X[k, :].T)) + opt.b).astype(np.float)
     Ek = g_xk - float(opt.Y[k])
     return Ek
 
@@ -92,8 +95,7 @@ def smo(i, opt):
 
         # 更新alpha_j
         # eta=K11+K22-2K12
-        eta = opt.X[i, :] * opt.X[i, :].T + opt.X[j, :] * opt.X[j, :]. \
-            T - 2.0 * opt.X[i, :] * opt.X[j, :].T
+        eta = opt.X[i, :].dot(opt.X[i, :].T) + opt.X[j, :].dot(opt.X[j, :].T) - 2.0 * opt.X[i, :].dot(opt.X[j, :].T)
         if eta <= 0:
             print("eta<=0")
             return 0
@@ -110,10 +112,10 @@ def smo(i, opt):
         updateEk(opt, i)
 
         # 更新b
-        b1 = opt.b - Ei - opt.Y[i] * (opt.alpha[i] - alphaIold) * opt.X[i, :] * opt.X[i, :]. \
-            T - opt.Y[j] * (opt.alpha[j] - alphaJold) * opt.X[i, :] * opt.X[j, :].T
-        b2 = opt.b - Ej - opt.Y[i] * (opt.alpha[i] - alphaIold) * opt.X[i, :] * opt.X[j, :]. \
-            T - opt.Y[j] * (opt.alpha[j] - alphaJold) * opt.X[j, :] * opt.X[j, :].T
+        b1 = opt.b - Ei - opt.Y[i] * (opt.alpha[i] - alphaIold) * opt.X[i, :].dot(opt.X[i, :].T) - opt.Y[j] * (
+                opt.alpha[j] - alphaJold) * opt.X[i, :].dot(opt.X[j, :].T)
+        b2 = opt.b - Ej - opt.Y[i] * (opt.alpha[i] - alphaIold) * opt.X[i, :].dot(opt.X[j, :].T) - opt.Y[j] * (
+                opt.alpha[j] - alphaJold) * opt.X[j, :].dot(opt.X[j, :].T)
         if 0 < opt.alpha[i] < opt.C:
             opt.b = b1
         elif 0 < opt.alpha[j] < opt.C:
@@ -126,7 +128,7 @@ def smo(i, opt):
 
 
 def svm(X, Y, C, tolerance, maxIter, kTup=('lin', 0)):
-    opt = OptStruct(np.array(X), np.array(Y).T, C, tolerance)
+    opt = OptStruct(np.array(X), np.array(Y), C, tolerance)
     iteration = 0
     entireSet = True  # 冷热数据分离，热数据：0<alpha<C，冷数据：alpha<=0 | alpha>=C
     alphaPairsChanged = 0
@@ -137,15 +139,15 @@ def svm(X, Y, C, tolerance, maxIter, kTup=('lin', 0)):
         if entireSet:
             for i in range(opt.m):
                 alphaPairsChanged += smo(i, opt)
-                print("全部遍历, iter:%d i:%d, pairs changed %d".format(iteration, i, alphaPairsChanged))
-                iteration += 1
+                print("全部遍历, iter:{} i:{}, pairs changed {}".format(iteration, i, alphaPairsChanged))
+            iteration += 1
         # 遍历热数据
         else:
-            nonBoundIs = np.nonzero((opt.alpha > 0) * (opt.alpha < C))[0]  # 非边界值：0<alpha<C
+            nonBoundIs = np.nonzero((opt.alpha > opt.epsilon) * (opt.alpha < C - opt.epsilon))[0]  # 非边界值：0<alpha<C
             for i in nonBoundIs:
                 alphaPairsChanged += smo(i, opt)
-                print("非边界值遍历, iter: %d i:%d, pairs changed %d".format(iteration, i, alphaPairsChanged))
-                iteration += 1
+                print("非边界值遍历, iter:{} i:{}, pairs changed {}".format(iteration, i, alphaPairsChanged))
+            iteration += 1
         # 如果该次遍历了全部的alpha，则下次遍历热数据中的alpha
         if entireSet:
             entireSet = False
@@ -154,3 +156,14 @@ def svm(X, Y, C, tolerance, maxIter, kTup=('lin', 0)):
             entireSet = True
         print("iteration number: %d".format(iteration))
     return opt.b, opt.alpha
+
+
+def weight(X, Y, alpha):
+    """
+    :param X:
+    :param Y: Y.shape = [-1, 1]
+    :param alpha:alpha.shape = [-1, 1]
+    :return:w = sum(alpha*Y*X)
+    """
+    w = (Y * alpha * X).sum(axis=0)
+    return w

@@ -5,7 +5,7 @@ from numpy import mat
 
 def smoSimple(dataMatIn, classLabels, C, toler, maxIter):
     dataMat = mat(dataMatIn)
-    labelMat = mat(classLabels).transpose()
+    labelMat = mat(classLabels).T
 
     b = 0
     m, n = np.shape(dataMat)
@@ -16,13 +16,15 @@ def smoSimple(dataMatIn, classLabels, C, toler, maxIter):
         alphaPairsChanged = 0
         for i in range(m):
             # g(xi)=sum(alpha_i*yi*K(xi,x))+b
-            g_xi = float(np.multiply(alphas, labelMat).T * (dataMat * dataMat[i, :].T)) + b
+            g_xi = (np.multiply(alphas, labelMat).T.dot(dataMat.dot(dataMat[i, :].T)) + b).astype(np.float)
             # Ei=g(xi)-yi
             Ei = g_xi - float(labelMat[i])
 
             if ((labelMat[i] * Ei < -toler) and (alphas[i] < C)) or ((labelMat[i] * Ei > toler) and (alphas[i] > 0)):
-                j = selectJrand(i, m)
-                g_xj = float(np.multiply(alphas, labelMat).T * (dataMat * dataMat[j, :].T)) + b
+                j = i
+                while j == i:
+                    j = int(np.random.uniform(0, m))
+                g_xj = (np.multiply(alphas, labelMat).T.dot(dataMat.dot(dataMat[j, :].T)) + b).astype(np.float)
                 Ej = g_xj - float(labelMat[j])
 
                 alphaIold = alphas[i].copy()
@@ -40,8 +42,8 @@ def smoSimple(dataMatIn, classLabels, C, toler, maxIter):
                     continue
 
                 # 更新alpha_j
-                eta = dataMat[i, :] * dataMat[i, :].T + dataMat[j, :] * dataMat[j, :]. \
-                    T - 2.0 * dataMat[i, :] * dataMat[j, :].T
+                eta = dataMat[i, :].dot(dataMat[i, :].T) + dataMat[j, :].dot(dataMat[j, :].T) - 2.0 * dataMat[i, :].dot(
+                    dataMat[j, :].T)
                 if eta <= 0:
                     print("eta<=0")
                     continue
@@ -54,10 +56,10 @@ def smoSimple(dataMatIn, classLabels, C, toler, maxIter):
                 # 更新alpha_i
                 alphas[i] += labelMat[j] * labelMat[i] * (alphaJold - alphas[j])
 
-                b1 = b - Ei - labelMat[i] * (alphas[i] - alphaIold) * dataMat[i, :] * dataMat[i, :]. \
-                    T - labelMat[j] * (alphas[j] - alphaJold) * dataMat[i, :] * dataMat[j, :].T
-                b2 = b - Ej - labelMat[i] * (alphas[i] - alphaIold) * dataMat[i, :] * dataMat[j, :]. \
-                    T - labelMat[j] * (alphas[j] - alphaJold) * dataMat[j, :] * dataMat[j, :].T
+                b1 = b - Ei - labelMat[i] * (alphas[i] - alphaIold) * dataMat[i, :].dot(dataMat[i, :].T) - labelMat[
+                    j] * (alphas[j] - alphaJold) * dataMat[i, :].dot(dataMat[j, :].T)
+                b2 = b - Ej - labelMat[i] * (alphas[i] - alphaIold) * dataMat[i, :].dot(dataMat[j, :].T) - labelMat[
+                    j] * (alphas[j] - alphaJold) * dataMat[j, :].dot(dataMat[j, :].T)
                 if 0 < alphas[i] < C:
                     b = b1
                 elif 0 < alphas[j] < C:
@@ -65,11 +67,11 @@ def smoSimple(dataMatIn, classLabels, C, toler, maxIter):
                 else:
                     b = (b1 + b2) / 2.0
                 alphaPairsChanged += 1
-                print("iter: %d i:%d, pairs changed %d".format(iter, i, alphaPairsChanged))
+                print("iter: {} i:{}, pairs changed {}".format(iter, i, alphaPairsChanged))
 
         if alphaPairsChanged == 0:
             iter += 1
         else:
             iter = 0
-        print("iteration number: %d".format(iter))
+        print("iteration number: {}".format(iter))
     return b, alphas
