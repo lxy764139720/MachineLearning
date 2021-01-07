@@ -1,12 +1,16 @@
+from collections import Counter
+
 import numpy as np
 from sklearn.metrics import accuracy_score
 
 
 class SVC:
     def __init__(self, C=1e9, kernel='rbf', gamma='scale', coef0=0, degree=3, epsilon=1e-3, max_steps=np.inf,
-                 probability=False, verbose=False):
+                 decision_function_shape='ovr', probability=False, verbose=False):
         assert C > 0, "C must be greater than 0"
         assert epsilon > 0, "epsilon must be greater than 0"
+        assert decision_function_shape == 'ovo' or decision_function_shape == 'ovr', \
+            "decision_function_shape must be ovo or ovr"
         self.C = C
         self.kernel = kernel
         self.gamma = gamma
@@ -14,6 +18,7 @@ class SVC:
         self.degree = degree
         self.epsilon = epsilon
         self.max_steps = max_steps
+        self.decision_function_shape = decision_function_shape
         self.probability = probability
         self.verbose = verbose
         # 私有变量
@@ -23,6 +28,9 @@ class SVC:
         self.alpha_ = None
         self.b_ = None
         self.w_ = None
+        self.classes_ = None
+        self.support_vectors_ = None
+        self.n_support_ = None
         self.K_ = None
         self.score_ = None
         self.prob_A_ = None
@@ -34,7 +42,7 @@ class SVC:
             assert X.shape[0] == Y.shape[0], "the size of X must be equal to the size of y"
             assert C > 0, "C must be greater than 0"
             assert epsilon > 0, "epsilon must be greater than 0"
-            if kernel == 'rbf' and gamma > 0:
+            if kernel == 'rbf' and gamma <= 0:
                 raise ValueError("gamma of rbf kernel must be greater than 0")
             self.X = X
             self.Y = Y
@@ -51,6 +59,7 @@ class SVC:
 
     def fit(self, X, Y):
         assert X.shape[0] == Y.shape[0], "the size of X must be equal to the size of y"
+        # 计算gamma
         if self.kernel == 'rbf':
             if self.gamma == 'scale':
                 # gamma='scale' 时，gamma=1/(n_features*X.var())
@@ -60,46 +69,32 @@ class SVC:
                 self.gamma = 1 / X.shape[1]
         opt = self.OptStruct(np.array(X), np.array(Y), self.C, self.epsilon, self.kernel, self.gamma, self.coef0,
                              self.degree)
+
+        # 存储数据
         self._X = X
         self._Y = Y
 
-        iteration = 0
-        entireSet = True  # 冷热数据分离，热数据：0<alpha<C，冷数据：alpha<=0 | alpha>=C
-        alphaPairsChanged = 0
-        # 第一层循环：循环少于最大次数 且 上一次alpha改变过或在部分数据集上alpha未改变
-        while iteration < self.max_steps and ((alphaPairsChanged > 0) or entireSet):
-            alphaPairsChanged = 0
-            # 遍历全部数据集，对每个alpha进行优化
-            if entireSet:
-                for i in range(opt.m):
-                    alphaPairsChanged += self._smo(i, opt)
-                    if self.verbose:
-                        print("全部遍历, iter:{} i:{}, pairs changed {}".format(iteration, i, alphaPairsChanged))
-                iteration += 1
-            # 遍历热数据
-            else:
-                # 非边界值：0<alpha<C
-                nonBound = np.nonzero((opt.alpha > opt.epsilon) * (opt.alpha < self.C - opt.epsilon))[0]
-                for i in nonBound:
-                    alphaPairsChanged += self._smo(i, opt)
-                    if self.verbose:
-                        print("非边界值遍历, iter:{} i:{}, pairs changed {}".format(iteration, i, alphaPairsChanged))
-                iteration += 1
-            # 如果该次遍历了全部的alpha，则下次遍历热数据中的alpha
-            if entireSet:
-                entireSet = False
-            # 如果热数据中的alpha没有可更新的，就遍历更新全部的alpha
-            elif alphaPairsChanged == 0:
-                entireSet = True
-            if self.verbose:
-                print("iteration number: %d".format(iteration))
-        self.alpha_ = opt.alpha
-        self.b_ = opt.b
-        self.w_ = self._weight(X, Y, self.alpha_)
-        # 计算svm sigmoid概率函数的系数
-        if self.probability:
-            self.K_ = opt.K
-            self.prob_A_, self.prob_B_ = self._calc_prob((self.alpha_ * Y * self.K_).sum(axis=0), self._Y)
+        counter = Counter(self._Y.flatten())
+        self.classes_ = np.array(list(counter.keys()))
+        num_classes = len(self.classes_)
+        if num_classes == 1:
+            raise ValueError("The number of labels must be greater than 1")
+        # 处理二分类
+        elif num_classes == 2:
+            result_dict = self._solve_binary(counter, opt)
+            self.alpha_ = result_dict['alpha']
+            self.b_ = result_dict['b']
+            self.w_ = result_dict['w']
+            self.support_vectors_ = result_dict['support_vectors']
+            if self.probability:
+                self.K_ = result_dict['K']
+                self.prob_A_, self.prob_B_ = result_dict['prob_A'], result_dict['prob_B']
+        # 处理多分类
+        else:
+            if self.decision_function_shape == 'ovr':
+                self._solve_ovr(counter, opt)
+            elif self.decision_function_shape == 'ovo':
+                self._solve_ovo(counter, opt)
         return self
 
     @classmethod
@@ -164,7 +159,7 @@ class SVC:
         Ek = self._calcEk(opt, k)
         opt.ECache[k] = [1, Ek]
 
-    def _smo(self, i, opt):
+    def _inner(self, i, opt):
         """
         内层循环，给定要优化的alpha[i]，找到最优的alpha[j]，并对这一对(i,j)进行优化
         :return: 1：i,j被更新，0：i,j未被更新
@@ -230,6 +225,152 @@ class SVC:
         else:
             return 0
 
+    def _outer(self, opt):
+        iteration = 0
+        entireSet = True  # 冷热数据分离，热数据：0<alpha<C，冷数据：alpha<=0 | alpha>=C
+        alphaPairsChanged = 0
+        # 第一层循环：循环少于最大次数 且 上一次alpha改变过或在部分数据集上alpha未改变
+        while iteration < self.max_steps and ((alphaPairsChanged > 0) or entireSet):
+            alphaPairsChanged = 0
+            # 遍历全部数据集，对每个alpha进行优化
+            if entireSet:
+                for i in range(opt.m):
+                    alphaPairsChanged += self._inner(i, opt)
+                    if self.verbose:
+                        print("全部遍历, iter:{} i:{}, pairs changed {}".format(iteration, i, alphaPairsChanged))
+                iteration += 1
+            # 遍历热数据
+            else:
+                # 非边界值：0<alpha<C
+                nonBound = np.nonzero((opt.alpha > opt.epsilon) * (opt.alpha < self.C - opt.epsilon))[0]
+                for i in nonBound:
+                    alphaPairsChanged += self._inner(i, opt)
+                    if self.verbose:
+                        print("非边界值遍历, iter:{} i:{}, pairs changed {}".format(iteration, i, alphaPairsChanged))
+                iteration += 1
+            # 如果该次遍历了全部的alpha，则下次遍历热数据中的alpha
+            if entireSet:
+                entireSet = False
+            # 如果热数据中的alpha没有可更新的，就遍历更新全部的alpha
+            elif alphaPairsChanged == 0:
+                entireSet = True
+            if self.verbose:
+                print("iteration number: {}".format(iteration))
+
+        result_dict = {'alpha': opt.alpha, 'b': opt.b, 'w': self._weight(self._X, self._Y, opt.alpha),
+                       'support_vectors': self._X[opt.alpha.flatten() > 0]}
+        # 计算svm sigmoid概率函数的系数
+        if self.probability:
+            result_dict['K'] = opt.K
+            result_dict['prob_A'], result_dict['prob_B'] = self._calc_prob((opt.alpha * self._Y * opt.K).sum(axis=0),
+                                                                           self._Y)
+        return result_dict
+
+    def _solve_binary(self, counter, opt):
+        # 处理二分类
+        if 1 in counter and -1 in counter:
+            result_dict = self._outer(opt)
+        elif 1 in counter:
+            opt.Y[opt.Y != 1] = -1
+            result_dict = self._outer(opt)
+        elif -1 in counter:
+            opt.Y[opt.Y != -1] = 1
+            result_dict = self._outer(opt)
+        else:
+            opt.Y[opt.Y == opt.Y[0]] = 1
+            opt.Y[opt.Y != opt.Y[0]] = -1
+            result_dict = self._outer(opt)
+        return result_dict
+
+    def _solve_ovr(self, counter, opt):
+        # ovr处理多分类
+        num_classes = len(self.classes_)
+        # 二维数组存储结果
+        self.b_ = np.zeros(num_classes)
+        self.w_ = np.zeros((num_classes, self._X.shape[1]))
+        self.n_support_ = np.zeros(num_classes)
+        if self.probability:
+            self.prob_A_ = np.zeros(num_classes)
+            self.prob_B_ = np.zeros(num_classes)
+
+        k = 0
+        for i in range(num_classes):
+            # 生成只包含两类{1, -1}的X, Y
+            i_index = opt.Y == self.classes_[i]
+            not_i_index = opt.Y != self.classes_[i]
+            opt.Y[i_index] = 1
+            opt.Y[not_i_index] = -1
+            result_dict = self._solve_binary(counter, opt)
+            if self.alpha_ is None:
+                self.alpha_ = result_dict['alpha']
+                self.support_vectors_ = result_dict['support_vectors']
+                if self.probability:
+                    self.K_ = result_dict['K']
+            else:
+                self.alpha_ = np.vstack((self.alpha_, result_dict['alpha']))
+                self.support_vectors_ = np.vstack((self.support_vectors_, result_dict['support_vectors']))
+                if self.probability:
+                    self.K_ = np.vstack((self.K_, result_dict['K']))
+            self.b_[k] = result_dict['b']
+            self.w_[k] = result_dict['w']
+            self.n_support_[k] = len(result_dict['support_vectors'])
+            if self.probability:
+                self.prob_A_[k] = result_dict['prob_A']
+                self.prob_B_[k] = result_dict['prob_B']
+            k += 1
+
+        self.alpha_ = np.array(self.alpha_)
+        self.support_vectors_ = np.array(self.support_vectors_)
+        if self.probability:
+            self.K_ = np.array(self.K_)
+
+    def _solve_ovo(self, counter, opt):
+        # ovo处理多分类
+        num_classes = len(self.classes_)
+        # 二维数组存储结果
+        self.b_ = np.zeros(int(num_classes * (num_classes - 1) / 2))
+        self.w_ = np.zeros((int(num_classes * (num_classes - 1) / 2), self._X.shape[1]))
+        self.n_support_ = np.zeros(num_classes)
+        if self.probability:
+            self.prob_A_ = np.zeros(int(num_classes * (num_classes - 1) / 2))
+            self.prob_B_ = np.zeros(int(num_classes * (num_classes - 1) / 2))
+
+        k = 0
+        for i in range(num_classes):
+            for j in range(num_classes):
+                # 只计算上三角部分
+                if i < j:
+                    # 生成只包含两类{1, -1}的X, Y
+                    opt.X = np.delete(self._X, self._Y != self.classes_[i] and self._Y != self.classes_[j], axis=0)
+                    opt.Y = np.delete(self._Y, self._Y != self.classes_[i] and self._Y != self.classes_[j], axis=0)
+                    i_index = opt.Y == self.classes_[i]
+                    j_index = opt.Y == self.classes_[j]
+                    opt.Y[i_index] = 1
+                    opt.Y[j_index] = -1
+                    result_dict = self._solve_binary(counter, opt)
+                    if self.alpha_ is None:
+                        self.alpha_ = result_dict['alpha']
+                        self.support_vectors_ = result_dict['support_vectors']
+                        if self.probability:
+                            self.K_ = result_dict['K']
+                    else:
+                        self.alpha_ = np.vstack((self.alpha_, result_dict['alpha']))
+                        self.support_vectors_ = np.vstack((self.support_vectors_, result_dict['support_vectors']))
+                        if self.probability:
+                            self.K_ = np.vstack((self.K_, result_dict['K']))
+                    self.b_[k] = result_dict['b']
+                    self.w_[k] = result_dict['w']
+                    self.n_support_[k] = len(result_dict['support_vectors'])
+                    if self.probability:
+                        self.prob_A_[k] = result_dict['prob_A']
+                        self.prob_B_[k] = result_dict['prob_B']
+                    k += 1
+
+        self.alpha_ = np.array(self.alpha_)
+        self.support_vectors_ = np.array(self.support_vectors_)
+        if self.probability:
+            self.K_ = np.array(self.K_)
+
     def _weight(self, X, Y, alpha):
         # w = sum(alpha_i*yi*Xi)
         w = (Y * alpha * X).sum(axis=0)
@@ -252,7 +393,7 @@ class SVC:
         length = numPositive + numNegative
 
         highTarget = (numPositive + 1.0) / (numPositive + 2.0)
-        lowTarget = 1 / numNegative + 2.0
+        lowTarget = 1 / (numNegative + 2.0)
         for i in range(length):
             if Y[i] > 0:
                 t[i] = highTarget
@@ -328,15 +469,106 @@ class SVC:
     def predict(self, X_test):
         assert self.w_ is not None, "must fit before predict"
         assert X_test.shape[1] == len(self.w_), "the feature number of X_predict must be equal to X_train"
+        num_classes = len(self.classes_)
+        # 二分类预测
+        if num_classes == 2:
+            Y_predict, probability = self._predict_binary(self._X, X_test, self.alpha_, self._Y, self.b_, self.prob_A_,
+                                                          self.prob_B_)
+        # 多分类预测
+        else:
+            if self.decision_function_shape == 'ovr':
+                Y_predict, probability = self._predict_ovr(X_test)
+            else:
+                Y_predict, probability = self._predict_ovo(X_test)
+        if self.probability:
+            self.predict_prob_ = probability
+        return Y_predict
+
+    def _predict_binary(self, X_train, X_test, alpha, Y, b, prob_A_, prob_B_):
+        # 二分类预测
         # Y_predict = sign(sum(alpha*Y*K(X,X_test))+b)
-        K = np.zeros((self._X.shape[0], X_test.shape[0]))
+        K = np.zeros((X_train.shape[0], X_test.shape[0]))
         for i in range(X_test.shape[0]):
-            K[:, i] = self.kernelTrans(self._X, X_test[i, :], self.kernel, self.gamma, self.coef0, self.degree)
-        score = (self.alpha_ * self._Y * K).sum(axis=0) + self.b_
+            K[:, i] = self.kernelTrans(X_train, X_test[i, :], self.kernel, self.gamma, self.coef0, self.degree)
+        score = (alpha * Y * K).sum(axis=0) + b
         Y_predict = (score >= 0).astype(int) * 2 - 1
         # 计算输出为正例1的概率
+        predict_prob = None
         if self.probability:
-            self.predict_prob_ = 1 / (1 + np.exp(self.prob_A_ * score + self.prob_B_))
+            predict_prob = 1 / (1 + np.exp(prob_A_ * score + prob_B_))
+        return Y_predict, predict_prob
+
+    def _predict_ovr(self, X_test):
+        # ovr多分类预测
+        num_classes = len(self.classes_)
+        Y_predict_list = np.zeros(num_classes)
+        if self.probability:
+            predict_prob = np.zeros(num_classes)
+
+        k = 0
+        for i in range(self.classes_):
+            n_support_before = np.sum(self.n_support_[:k])
+            n_support = self.n_support_[k]
+            alpha = self.alpha_[n_support_before:n_support_before + n_support]
+            X = self._X.copy()
+            Y = self._Y.copy()
+            i_index = Y == self.classes_[i]
+            not_i_index = Y != self.classes_[i]
+            Y[i_index] = 1
+            Y[not_i_index] = -1
+            b = self.b_[k]
+            prob_A = None
+            prob_B = None
+            if self.probability:
+                prob_A = self.prob_A_[k]
+                prob_B = self.prob_B_[k]
+            Y_predict_i, predict_prob_i = self._predict_binary(X, X_test, alpha, Y, b, prob_A, prob_B)
+            Y_predict_list[k] = Y_predict_i
+            if self.probability:
+                predict_prob[k] = predict_prob_i
+            k += 1
+
+        if self.probability:
+            self.predict_prob_ = predict_prob
+        Y_predict = (np.sum(Y_predict_list) >= 0).astype(int) * 2 - 1
+        return Y_predict
+
+    def _predict_ovo(self, X_test):
+        # ovo多分类预测
+        num_classes = len(self.classes_)
+        Y_predict_list = np.zeros(int(num_classes * (num_classes - 1) / 2))
+        if self.probability:
+            predict_prob = np.zeros(int(num_classes * (num_classes - 1) / 2))
+
+        k = 0
+        for i in range(self.classes_):
+            for j in range(self.classes_):
+                # 只预测上三角
+                if i < j:
+                    n_support_before = np.sum(self.n_support_[:k])
+                    n_support = self.n_support_[k]
+                    alpha = self.alpha_[n_support_before:n_support_before + n_support]
+                    X = np.delete(self._X, self._Y != self.classes_[i] and self._Y != self.classes_[j], axis=0)
+                    Y = np.delete(self._Y, self._Y != self.classes_[i] and self._Y != self.classes_[j], axis=0)
+                    i_index = Y == self.classes_[i]
+                    j_index = Y == self.classes_[j]
+                    Y[Y == self.classes_[i]] = 1
+                    Y[Y == self.classes_[j]] = -1
+                    b = self.b_[k]
+                    prob_A = None
+                    prob_B = None
+                    if self.probability:
+                        prob_A = self.prob_A_[k]
+                        prob_B = self.prob_B_[k]
+                    Y_predict_ij, predict_prob_ij = self._predict_binary(X, X_test, alpha, Y, b, prob_A, prob_B)
+                    Y_predict_list[k] = Y_predict_ij
+                    if self.probability:
+                        predict_prob[k] = predict_prob_ij
+                k += 1
+
+        if self.probability:
+            self.predict_prob_ = predict_prob
+        Y_predict = (np.sum(Y_predict_list) >= 0).astype(int) * 2 - 1
         return Y_predict
 
     def score(self, X_test, Y_test):
