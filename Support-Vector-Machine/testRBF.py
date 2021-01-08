@@ -1,7 +1,7 @@
 import numpy as np
-# from SVC import SVC
+from svm import SVC
 # from sklearn.svm import SVC
-from otherSVM import SVM
+# from otherSVM import SVM
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 
@@ -34,27 +34,23 @@ def gaussian_kernel(x, y):
 
 
 if __name__ == '__main__':
-    data, label = loadDataSet('testSetRBF2.txt')
-    svm = SVM(C=1, kernel=gaussian_kernel)
-    # svm = SVC(C=1, kernel='rbf', gamma='scale')
-    result = svm.fit(data, label)
+    # data, label = loadDataSet('testSetRBF2.txt')
+    dataSet = np.loadtxt('./round_scatter_simple.csv', delimiter=",")
+    data = dataSet[:, :2]
+    label = dataSet[:, -1]
+    svm = SVC(C=1e9, kernel='rbf', gamma='scale', probability=True, decision_function_shape='ovo')
+    result = svm.fit(data, label.reshape((-1, 1)))
 
     support_vectors = svm.support_vectors_
-    support_xlim = []
-    support_ylim = []
-    for i in range(len(support_vectors)):
-        support_xlim.append(support_vectors[i, 0])
-        support_ylim.append(support_vectors[i, 1])
+    # support_xlim = []
+    # support_ylim = []
+    # for i in range(len(support_vectors)):
+    #     support_xlim.append(support_vectors[i, 0])
+    #     support_ylim.append(support_vectors[i, 1])
 
-    # x = np.arange(-0.0, 8.0, 0.1)
-    # y = (-result.b_ - result.w_[0] * x) / result.w_[1]  # 由w1*x1+w2*x2+b=0得到x2(即y)=(-b-w1x1)/w2
-    # x.shape = (len(x), 1)
-    # y.shape = (len(x), 1)
-    # plt.plot(x, y, color="darkorange", linewidth=3.0, label="Boarder")  # 继续在ax图上作图
-
-    plot_decision_boundary(svm, axis=[-1, 1, -1, 1])
+    plot_decision_boundary(svm, axis=[0, 2.7, 0, 2.7])
     plt.scatter(data[label == 1][:, 0], data[label == 1][:, 1], color='b')
-    plt.scatter(data[label == -1][:, 0], data[label == -1][:, 1], color='r')
+    plt.scatter(data[label == 2][:, 0], data[label == 2][:, 1], color='r')
     # plt.scatter(support_xlim, support_ylim, color='g')
 
     plt.show()

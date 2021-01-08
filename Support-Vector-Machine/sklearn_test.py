@@ -1,6 +1,6 @@
 import numpy as np
 # from sklearn.svm import SVC
-from SVC import SVC
+from svm import SVC
 from sklearn.datasets import load_wine
 
 # def loadDataSet(fileName):

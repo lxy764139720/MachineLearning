@@ -3,7 +3,7 @@ from smoSimple import smoSimple
 import svmImproved
 import originalSVM
 import jianshu_SVM
-from SVC import SVC
+from svm import SVC
 
 
 def loadDataSet(fileName):

@@ -29,6 +29,7 @@ class SVC:
         self.b_ = None
         self.w_ = None
         self.classes_ = None
+        self.alpha_num_ = None
         self.support_vectors_ = None
         self.n_support_ = None
         self.K_ = None
@@ -92,9 +93,11 @@ class SVC:
         # 处理多分类
         else:
             if self.decision_function_shape == 'ovr':
-                self._solve_ovr(counter, opt)
+                self.alpha_num_ = np.array(list(counter.values()))
+                self._solve_ovr(opt)
             elif self.decision_function_shape == 'ovo':
-                self._solve_ovo(counter, opt)
+                self.alpha_num_ = np.array(list(counter.values()))  # TODO
+                self._solve_ovo(opt)
         return self
 
     @classmethod
@@ -257,13 +260,13 @@ class SVC:
             if self.verbose:
                 print("iteration number: {}".format(iteration))
 
-        result_dict = {'alpha': opt.alpha, 'b': opt.b, 'w': self._weight(self._X, self._Y, opt.alpha),
-                       'support_vectors': self._X[opt.alpha.flatten() > 0]}
+        result_dict = {'alpha': opt.alpha, 'b': opt.b, 'w': self._weight(opt.X, opt.Y, opt.alpha),
+                       'support_vectors': opt.X[opt.alpha.flatten() > 0]}
         # 计算svm sigmoid概率函数的系数
         if self.probability:
             result_dict['K'] = opt.K
-            result_dict['prob_A'], result_dict['prob_B'] = self._calc_prob((opt.alpha * self._Y * opt.K).sum(axis=0),
-                                                                           self._Y)
+            result_dict['prob_A'], result_dict['prob_B'] = self._calc_prob((opt.alpha * opt.Y * opt.K).sum(axis=0),
+                                                                           opt.Y)
         return result_dict
 
     def _solve_binary(self, counter, opt):
@@ -282,12 +285,13 @@ class SVC:
             result_dict = self._outer(opt)
         return result_dict
 
-    def _solve_ovr(self, counter, opt):
+    def _solve_ovr(self, opt):
         # ovr处理多分类
         num_classes = len(self.classes_)
         # 二维数组存储结果
         self.b_ = np.zeros(num_classes)
         self.w_ = np.zeros((num_classes, self._X.shape[1]))
+        self.alpha_num_ = np.zeros(num_classes)
         self.n_support_ = np.zeros(num_classes)
         if self.probability:
             self.prob_A_ = np.zeros(num_classes)
@@ -300,6 +304,12 @@ class SVC:
             not_i_index = opt.Y != self.classes_[i]
             opt.Y[i_index] = 1
             opt.Y[not_i_index] = -1
+            opt.m = opt.X.shape[0]
+            opt.alpha = np.zeros((opt.m, 1))
+            opt.K = np.zeros((opt.m, opt.m))
+            for a in range(opt.m):
+                opt.K[:, a] = SVC.kernelTrans(opt.X, opt.X[a, :], self.kernel, self.gamma, self.coef0, self.degree)
+            counter = Counter(opt.Y.flatten())
             result_dict = self._solve_binary(counter, opt)
             if self.alpha_ is None:
                 self.alpha_ = result_dict['alpha']
@@ -313,6 +323,7 @@ class SVC:
                     self.K_ = np.vstack((self.K_, result_dict['K']))
             self.b_[k] = result_dict['b']
             self.w_[k] = result_dict['w']
+            self.alpha_num_[k] = len(result_dict['alpha'])
             self.n_support_[k] = len(result_dict['support_vectors'])
             if self.probability:
                 self.prob_A_[k] = result_dict['prob_A']
@@ -324,12 +335,13 @@ class SVC:
         if self.probability:
             self.K_ = np.array(self.K_)
 
-    def _solve_ovo(self, counter, opt):
+    def _solve_ovo(self, opt):
         # ovo处理多分类
         num_classes = len(self.classes_)
         # 二维数组存储结果
         self.b_ = np.zeros(int(num_classes * (num_classes - 1) / 2))
         self.w_ = np.zeros((int(num_classes * (num_classes - 1) / 2), self._X.shape[1]))
+        self.alpha_num_ = np.zeros(int(num_classes * (num_classes - 1) / 2))
         self.n_support_ = np.zeros(num_classes)
         if self.probability:
             self.prob_A_ = np.zeros(int(num_classes * (num_classes - 1) / 2))
@@ -341,12 +353,21 @@ class SVC:
                 # 只计算上三角部分
                 if i < j:
                     # 生成只包含两类{1, -1}的X, Y
-                    opt.X = np.delete(self._X, self._Y != self.classes_[i] and self._Y != self.classes_[j], axis=0)
-                    opt.Y = np.delete(self._Y, self._Y != self.classes_[i] and self._Y != self.classes_[j], axis=0)
+                    mask = self._Y != self.classes_[i]
+                    mask[(self._Y != self.classes_[j]) == False] = False
+                    opt.X = np.delete(self._X, mask.flatten(), axis=0)
+                    opt.Y = np.delete(self._Y, mask.flatten(), axis=0)
                     i_index = opt.Y == self.classes_[i]
                     j_index = opt.Y == self.classes_[j]
+                    opt.m = opt.X.shape[0]
                     opt.Y[i_index] = 1
                     opt.Y[j_index] = -1
+                    opt.alpha = np.zeros((opt.m, 1))
+                    opt.K = np.zeros((opt.m, opt.m))
+                    for a in range(opt.m):
+                        opt.K[:, a] = SVC.kernelTrans(opt.X, opt.X[a, :], self.kernel, self.gamma, self.coef0,
+                                                      self.degree)
+                    counter = Counter(opt.Y.flatten())
                     result_dict = self._solve_binary(counter, opt)
                     if self.alpha_ is None:
                         self.alpha_ = result_dict['alpha']
@@ -360,6 +381,7 @@ class SVC:
                             self.K_ = np.vstack((self.K_, result_dict['K']))
                     self.b_[k] = result_dict['b']
                     self.w_[k] = result_dict['w']
+                    self.alpha_num_[k] = len(result_dict['alpha'])
                     self.n_support_[k] = len(result_dict['support_vectors'])
                     if self.probability:
                         self.prob_A_[k] = result_dict['prob_A']
@@ -468,7 +490,7 @@ class SVC:
 
     def predict(self, X_test):
         assert self.w_ is not None, "must fit before predict"
-        assert X_test.shape[1] == len(self.w_), "the feature number of X_predict must be equal to X_train"
+        # assert X_test.shape[1] == self.w_.shape[1], "the feature number of X_predict must be equal to X_train"
         num_classes = len(self.classes_)
         # 二分类预测
         if num_classes == 2:
@@ -501,15 +523,16 @@ class SVC:
     def _predict_ovr(self, X_test):
         # ovr多分类预测
         num_classes = len(self.classes_)
-        Y_predict_list = np.zeros(num_classes)
+        # Y_predict_list = np.zeros(num_classes)
         if self.probability:
-            predict_prob = np.zeros(num_classes)
+            predict_prob = np.zeros((X_test.shape[0], num_classes))
 
         k = 0
-        for i in range(self.classes_):
-            n_support_before = np.sum(self.n_support_[:k])
-            n_support = self.n_support_[k]
-            alpha = self.alpha_[n_support_before:n_support_before + n_support]
+        for i in range(num_classes):
+            # 整理对应的二分类数据
+            alpha_num_before = np.sum(self.alpha_num_[:k])
+            alpha_num = self.alpha_num_[k]
+            alpha = self.alpha_[int(alpha_num_before):int(alpha_num_before + alpha_num)]
             X = self._X.copy()
             Y = self._Y.copy()
             i_index = Y == self.classes_[i]
@@ -522,53 +545,60 @@ class SVC:
             if self.probability:
                 prob_A = self.prob_A_[k]
                 prob_B = self.prob_B_[k]
+            # 二分类预测
             Y_predict_i, predict_prob_i = self._predict_binary(X, X_test, alpha, Y, b, prob_A, prob_B)
-            Y_predict_list[k] = Y_predict_i
+            # Y_predict_list[k] = Y_predict_i
             if self.probability:
-                predict_prob[k] = predict_prob_i
+                predict_prob[:, k] = predict_prob_i
             k += 1
 
         if self.probability:
             self.predict_prob_ = predict_prob
-        Y_predict = (np.sum(Y_predict_list) >= 0).astype(int) * 2 - 1
+            # 取每行概率值最大的下标对应的类
+            predict_index = np.argmax(self.predict_prob_, axis=1)
+            Y_predict = np.array([[self.classes_[i[0]]] for i in predict_index])
         return Y_predict
 
     def _predict_ovo(self, X_test):
         # ovo多分类预测
         num_classes = len(self.classes_)
-        Y_predict_list = np.zeros(int(num_classes * (num_classes - 1) / 2))
+        Y_predict_list = np.zeros((X_test.shape[0], int(num_classes * (num_classes - 1) / 2)))
         if self.probability:
-            predict_prob = np.zeros(int(num_classes * (num_classes - 1) / 2))
+            predict_prob = np.zeros((X_test.shape[0], int(num_classes * (num_classes - 1) / 2)))
 
         k = 0
-        for i in range(self.classes_):
-            for j in range(self.classes_):
+        for i in range(num_classes):
+            for j in range(num_classes):
                 # 只预测上三角
                 if i < j:
-                    n_support_before = np.sum(self.n_support_[:k])
-                    n_support = self.n_support_[k]
-                    alpha = self.alpha_[n_support_before:n_support_before + n_support]
-                    X = np.delete(self._X, self._Y != self.classes_[i] and self._Y != self.classes_[j], axis=0)
-                    Y = np.delete(self._Y, self._Y != self.classes_[i] and self._Y != self.classes_[j], axis=0)
+                    # 整理对应的二分类数据
+                    alpha_num_before = np.sum(self.alpha_num_[:k])
+                    alpha_num = self.alpha_num_[k]
+                    alpha = self.alpha_[int(alpha_num_before):int(alpha_num_before + alpha_num)]
+                    mask = self._Y != self.classes_[i]
+                    mask[(self._Y != self.classes_[j]) == False] = False
+                    X = np.delete(self._X, mask.flatten(), axis=0)
+                    Y = np.delete(self._Y, mask.flatten(), axis=0)
                     i_index = Y == self.classes_[i]
                     j_index = Y == self.classes_[j]
-                    Y[Y == self.classes_[i]] = 1
-                    Y[Y == self.classes_[j]] = -1
+                    Y[i_index] = 1
+                    Y[j_index] = -1
                     b = self.b_[k]
                     prob_A = None
                     prob_B = None
                     if self.probability:
                         prob_A = self.prob_A_[k]
                         prob_B = self.prob_B_[k]
+                    # 二分类预测
                     Y_predict_ij, predict_prob_ij = self._predict_binary(X, X_test, alpha, Y, b, prob_A, prob_B)
-                    Y_predict_list[k] = Y_predict_ij
+                    Y_predict_list[:, k] = Y_predict_ij
                     if self.probability:
-                        predict_prob[k] = predict_prob_ij
+                        predict_prob[:, k] = predict_prob_ij
                 k += 1
 
         if self.probability:
             self.predict_prob_ = predict_prob
-        Y_predict = (np.sum(Y_predict_list) >= 0).astype(int) * 2 - 1
+        Y_predict = (np.sum(Y_predict_list, axis=1) >= 0).astype(int) * 2 - 1
         return Y_predict
 
     def score(self, X_test, Y_test):
